@@ -1,0 +1,82 @@
+---
+title: "Untitled"
+author: "Daniel Morgan"
+date: "3/21/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+aircraft <- read.csv("C:/Users/ltdan/Documents/MBA/capstone/aircraft.csv", header=FALSE)
+```
+
+```{r}
+ac.coords <- aircraft[which(aircraft$transmission.type == 3 & 
+                              !is.na(aircraft$long) & 
+                              !is.na(aircraft$lat)), 
+                      c("aircraft.hex", "datetime", "log.datetime",
+                        "alt", "lat", "long")] 
+
+
+ac.coords$lag <- as.numeric(difftime(ac.coords$log.datetime, ac.coords$datetime, units = "secs"))
+
+
+
+```
+
+```{r}
+library(geodist)
+
+#coordinates of ground base 
+home <- data.frame(long = -84.432280, lat = 39.130190)
+
+#Distance to home base in meters
+ac.coords$dist <- sqrt(geodist(data.frame(long=ac.coords$long, lat = ac.coords$lat), home, measure="geodesic")^2 
+                       + (ac.coords$alt*0.3048)^2)
+
+#Speed of light
+c <- 2.998e8
+
+#theoretical distance according to speed of light and lag time
+
+ac.coords$theo.dist <- ac.coords$lag * c
+
+head(ac.coords)
+
+
+north <- ac.coords[which(ac.coords$lat > home$lat),]
+
+south <- ac.coords[which(ac.coords$lat < home$lat),]
+
+plot(north$dist, north$lag)
+plot(south$dist, south$lag)
+
+
+
+index <- sample(nrow(ac.coords), nrow(ac.coords) * .01)
+
+
+ac.sample = ac.coords[which(ac.coords$dist >= 200000),] 
+
+plot(ac.coords$dist, ac.coords$lag, main="Lag time vs Distance", xlab="Distance (m)", ylab="Lag time (s)")
+
+
+hist(ac.coords$dist)
+
+
+ac.coords$theo.lag <-  ac.coords$dist/c
+
+head(ac.coords)
+par(mfrow=c(1,1))
+hist(ac.coords$dist, main="True Distance", xlab="Distance (m)")
+hist(ac.coords$theo.lag, main="Theoretical Lag Time", xlab="Time (s)")
+
+hist(ac.coords$lag, main="True Lag Time", xlab="Time (s)")
+hist(ac.coords$theo.dist, main = "Theoretical Distance", xlab="Distance (m)")
+
+```
+
+
+
+

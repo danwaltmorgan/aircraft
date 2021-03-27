@@ -1,0 +1,247 @@
+---
+title: "altitude"
+author: "Daniel Morgan"
+date: "3/24/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+head(airspeed.calc)
+
+
+plot(airspeed.calc$speed, airspeed.calc$lat)
+
+plot(aircraft$heading, aircraft$ground.speed, density=T)
+
+
+
+hist(aircraft$heading)
+```
+
+```{r}
+head(aircraft)
+
+aircraft.3 <- aircraft[which(aircraft$transmission.type == 3),]
+
+aircraft.3$datetime <- as.numeric(round(aircraft.3$datetime, "secs"))
+
+aircraft.3 <- aircraft.3[which(!is.na(aircraft.3)),]
+
+alt <- aggregate(aircraft.3$alt,
+                 by=list(aircraft.3$aircraft.hex,
+                         aircraft.3$datetime),
+                 mean)
+
+lat <- aggregate(aircraft.3$lat,
+                 by=list(aircraft.3$aircraft.hex,
+                         aircraft.3$datetime),
+                 mean)
+
+long <- aggregate(aircraft.3$long,
+                 by=list(aircraft.3$aircraft.hex,
+                         aircraft.3$datetime),
+                 mean)
+```
+
+```{r}
+aircraft.4 <- aircraft[which(aircraft$transmission.type == 4),]
+aircraft.4$datetime <- as.numeric(round(aircraft.4$datetime, "secs"))
+aircraft.4 <- aircraft.4[which(!is.na(aircraft.4)),] 
+
+
+heading <- aggregate(aircraft.4$heading,
+                     by=list(aircraft.4$aircraft.hex,
+                             aircraft.4$datetime),
+                     mean)
+
+ground.speed <- aggregate(aircraft.4$ground.speed, 
+                          by=list(aircraft.4$aircraft.hex,
+                                  aircraft.4$datetime),
+                          mean)
+
+vert.rate <- aggregate(aircraft.4$vertical.rate,
+                       by=list(aircraft.4$aircraft.hex,
+                               aircraft.4$datetime),
+                       mean)
+```
+
+```{r}
+agg.flights <- merge(alt, heading, by=c("Group.1", "Group.2"))
+agg.flights <- merge(agg.flights, ground.speed, by=c("Group.1", "Group.2"))
+agg.flights <- merge(agg.flights, vert.rate, by=c("Group.1", "Group.2"))
+agg.flights <- merge(agg.flights, lat, by=c("Group.1", "Group.2"))
+agg.flights <- merge(agg.flights, long, by=c("Group.1", "Group.2"))
+
+colnames(agg.flights) <- c("hex", "datetime", "alt", "heading", "speed", "vert.rate", "lat", "long")
+
+flights <- na.omit(agg.flights)
+par(mfrow = c(1,2))
+plot(flights$speed, flights$alt, main="Altitude vs Ground Speed", xlab="Ground Speed (Knots)", ylab="Altitude (ft)")
+plot(flights$heading, flights$speed, main="Heading vs Ground Speed", xlab="Heading (degrees)", ylab="Ground Speed (Knots)")
+```
+
+```{r}
+train.index <- sample(nrow(flights), 10000)
+test.index <- sample(nrow(flights), 2000)
+
+flights.train <- flights[train.index,]
+flights.test <- flights[test.index,]
+
+full.fit <- lm(speed~alt + heading + vert.rate + long + lat, data=flights.train)
+
+summary(full.fit)
+
+#insample
+mean((predict(full.fit) - flights.train$speed)^2)
+
+#outsample
+mean((predict(full.fit, newdata=flights.test) - flights.test$speed)^2)
+
+BIC(full.fit)
+AIC(full.fit)
+
+plot(predict(fit), flights.train$speed)
+
+
+fit.b.step <- step(full.fit, direction="backward")
+summary(fit.b.step)
+
+BIC(fit.b.step)
+AIC(fit.b.step)
+
+#insample
+mean((predict(fit.b.step) - flights.train$speed)^2)
+mean((predict(fit.b.step, newdata=flights.test) - flights.test$speed)^2)
+
+null.model <- lm(speed~1, data=flights.train)
+
+fit.f.step <- step(null.model, scope=list(lower=null.model, upper=full.fit), direction="forward")
+
+summary(fit.f.step)
+
+#no coordinates
+
+n.fit <- lm(speed~alt+ heading+vert.rate, data=flights.train)
+
+summary(n.fit)
+BIC(n.fit)
+AIC(n.fit)
+
+mean((predict(n.fit) - flights.train$speed)^2)
+mean((predict(n.fit, newdata = flights.test) - flights.test$speed)^2)
+
+plot(flights.train$speed, residuals(full.fit))
+
+```
+
+```{r}
+library(corrplot)
+
+cor.flights <- as.matrix(flights.train[,c("speed", "alt", "heading", "vert.rate", "lat", "long")] )
+
+corrplot(cor(cor.flights), method="color", type="upper", diag=T, number.cex = .8, addCoef.col = "black")
+
+cor(cor.flights)
+
+```
+
+```{r}
+library(randomForest)
+fit.rf <- randomForest(speed~alt+heading+vert.rate + lat+ long, data=flights.train, ntree=500)
+
+fit.rf$importance
+
+mean((predict(fit.rf) - flights.train$speed)^2)
+mean((predict(fit.rf, newdata=flights.test) - flights.test$speed)^2)
+
+```
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+fit.rpart <- rpart(speed ~ alt + heading + vert.rate + lat + long, data = flights.train)
+prp(fit.rpart, digits = 4, extra = 1)
+
+summary(fit.rpart)
+
+mean((predict(fit.rpart) - flights.train$speed)^2)
+mean((predict(fit.rpart, newdata=flights.test) - flights.test$speed)^2)
+
+largetree <- rpart(speed ~ alt + heading + vert.rate + lat + long, data = flights.train, cp=.001)
+prp(largetree,  extra=1)
+
+plotcp(largetree)
+
+pruned <- prune(largetree, cp=.0009)
+
+summary(pruned)
+prp(pruned)
+
+mean((predict(pruned) - flights.train$speed)^2)
+mean((predict(pruned, newdata=flights.test) - flights.test$speed)^2)
+
+
+plot(flights.train$speed, predict(pruned))
+```
+
+
+Time series plot of unique aircraft by minute
+```{r}
+
+head(as.numeric(round((aircraft$datetime), "min")))
+
+min(aircraft$datetime)
+
+flights.ts <- aggregate(aircraft$aircraft.hex, 
+                        by=list(as.numeric(round(aircraft$datetime, "min"))),
+                        function(x) length(unique(x))) 
+
+flights.ts$Group.1 <- as.POSIXct(flights.ts$Group.1, origin="1970-01-01 00:00:00")
+
+plot(flights.ts$Group.1, flights.ts$x, type="l", main="Aircraft by Minute", 
+     xlab="Time", ylab="Aircraft Observed")
+
+flights.ts[which.max(flights.ts$x),]
+
+length(unique(aircraft$aircraft.hex))
+```
+
+Coordinate map
+```{r}
+library(tidyverse)
+library(ggmap)
+
+register_google(key="AIzaSyATKglsTdi6nn7gInCkIcsYKKxvL84RqJ8", write=T)
+
+map <- ggmap(get_googlemap(center=c(lon=-84.432280, lat=38.75),
+                    zoom = 8, scale = 2,
+                    maptype = "terrain",
+                    color="color")) + 
+  geom_point(aes(x=long, y=lat, color=alt), data=aircraft.3, alpha=.5, size=.5, )
+
+map + geom_vline(xintercept=-84.432280) + geom_hline(yintercept = 39.130190)
+```
+
+```{r}
+home <- data.frame(lat=39.130190, long=-84.432280)
+
+(NE <- nrow(aircraft.3[which(aircraft.3$lat > home$lat & aircraft.3$long > home$long),]))
+(NW <- nrow(aircraft.3[which(aircraft.3$lat > home$lat & aircraft.3$long < home$long),]))
+(SW <- nrow(aircraft.3[which(aircraft.3$lat < home$lat & aircraft.3$long < home$long),]))
+(SE <- nrow(aircraft.3[which(aircraft.3$lat < home$lat & aircraft.3$long > home$long),]))
+
+```
+
+
+```{r}
+library(circular)
+
+ggplot(data=aircraft, aes(heading)) + 
+  geom_histogram(breaks=seq(0,360,10)) +
+  coord_polar(start=0) + 
+  scale_x_continuous(breaks=seq(0,360,45))
+
+hist(aircraft$heading)
+```

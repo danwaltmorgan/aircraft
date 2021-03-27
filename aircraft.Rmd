@@ -1,0 +1,314 @@
+---
+title: "Untitled"
+author: "Daniel Morgan"
+date: "3/8/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+aircraft <- read.csv("C:/Users/ltdan/Documents/MBA/capstone/aircraft.csv", header=FALSE)
+dim(aircraft)
+
+aircraft.full <- read.csv("D:/aircraft.csv", header=FALSE)
+dim(aircraft.full)
+aircraft.full[22842374,]
+
+aircraft <- aircraft.full
+```
+
+```{r}
+cols <- c("message.type", "transmission.type", "session.id", "aircraft.id", "aircraft.hex", "flight.num",
+  "date", "time", "date.log", "time.log", "call.sign", "alt", "ground.speed", "heading", "lat", "long",
+  "vertical.rate", "squawk", "alert", "emergency", "SPI", "grounded")
+
+colnames(aircraft) <- cols
+
+attach(aircraft)
+
+unique(aircraft$date)
+
+aircraft <- aircraft[which(aircraft$date == "2021-03-5"),]
+
+head(aircraft)
+str(aircraft)
+summary(aircraft)
+dim(aircraft)
+hist(aircraft$transmission.type)
+
+```
+
+```{r}
+unique(message.type)
+#Only MSG
+unique(transmission.type)
+#1-8 could be factor
+unique(session.id)
+#1
+unique(aircraft.id)
+unique(flight.num)
+#1 same with flight number
+length(unique(aircraft.hex))
+#684 flights
+length(unique(call.sign))
+#632
+length(unique(squawk))
+#446
+unique(alert)
+#0, NA, -1
+unique(emergency)
+#NA 0
+unique(SPI)
+#0, NA, -1
+unique(grounded)
+
+#Distribtions
+hist(aircraft$alt, main="Altitude", xlab="Altitude (ft)")
+max(na.omit(aircraft$alt))
+
+hist(aircraft$heading)
+hist(aircraft$vertical.rate)
+
+hist(aircraft$ground.speed, main="Histogram of Ground Speed", xlab="Ground Speed (Knots)")
+
+
+(max.alt <- max(na.omit(alt)))
+min.alt <- min(na.omit(alt))
+
+(max.hex <- aircraft[which(alt == max.alt),"aircraft.hex"])
+
+#reduce dataframe 
+aircraft <- subset(aircraft, select = -c(message.type, session.id, aircraft.id, flight.num))
+
+#remove altitude outliers
+aircraft.r <- aircraft[which(aircraft$alt <= 60000 | is.na(aircraft$alt)),] 
+aircraft <- aircraft.r
+
+
+#remove vertical rate outlier
+# aircraft.r <- aircraft[which(aircraft$vertical.rate <= 20000 | is.na(aircraft$vertical.rate)),]
+# aircraft <- aircraft.r
+
+```
+
+Lat and Long
+```{r}
+library(ggplot2)
+
+location <- aircraft[which(transmission.type==3),]
+
+summary(location)
+
+ggplot(location, aes(x=long, y=lat, col=alt)) + 
+  geom_point() 
+
+```
+
+Remove useless rows
+```{r}
+aircraft.split <- split(aircraft, f=aircraft.hex)
+
+test <- aircraft.split[[20]]
+
+test$transmission.type <- as.factor(test$transmission.type)
+
+test.split <- split(test, f=test$transmission.type)
+test.split
+
+# 1 grounded
+# 3 contains lat, long and alt and grounded
+# 4 contains ground speed, heading. vertical rate
+# 5 has alert and spi
+
+# 7 Delete
+# 8 Delete
+
+
+(aircraft[which(aircraft$grounded == -1 & aircraft$alt < 1500),c("transmission.type", "alt", "alert", "grounded", "aircraft.hex")])
+
+mean(na.omit(aircraft$grounded)) * 100
+#grounded aircraft have a lot of inconsistencies and no alt indication that it is actually on the ground
+
+
+```
+
+
+Slow plane
+```{r}
+aircraft[which(aircraft$ground.speed <= 100),]
+slow.plane <- aircraft[which(aircraft$aircraft.hex =="AD8294" & aircraft$transmission.type == 3),]
+
+plot(slow.plane$long, slow.plane$lat)
+plot(strptime(slow.plane$time, format="%H:%M:%OS"), slow.plane$alt, )
+slow.plane$alt
+slow.plane$time
+
+
+```
+
+Calculated speed and compare
+```{r}
+#combine and convert date and time variables to datetime variabel
+aircraft$datetime <-  strptime(paste(aircraft$date, aircraft$time, sep=" "), format="%Y-%m-%d %H:%M:%OS")
+aircraft$log.datetime <- strptime(paste(aircraft$date.log, aircraft$time.log, sep=" "), format="%Y/%m/%d %H:%M:%OS")
+
+#Only look at transmission type 3
+aircraft.3 <- aircraft[which(aircraft$transmission.type == 3),c("aircraft.hex", "datetime", "log.datetime", "alt", "lat", "long")]
+
+```
+
+```{r}
+#get rid of rows without coordinates
+aircraft.3 <- aircraft.3[!is.na(aircraft.3$long),]
+#split into subsets based on the hex number
+aircraft.3 <- split(aircraft.3, f=aircraft.3$aircraft.hex)
+
+#Valid planes are planes with more than 10 observations
+valid.planes <- list()
+non.valid.planes <- list()
+
+for (plane in aircraft.3) {
+  if (nrow(plane) >= 10) {
+    valid.planes <- c(valid.planes, list(plane))
+  } else {
+    non.valid.planes <- c(non.valid.planes, list(plane))    
+  }
+}
+head(valid.planes)
+non.valid.planes
+```
+
+
+```{r}
+library(geodist)
+
+#Calculate the distance between points using geodist
+#Distance is in meters
+planes.calc <- list()
+for (plane in valid.planes) {
+  plane$dist <- 0
+  plane$time.dif <- 0
+  plane$speed <- 0
+  for (i in 2:nrow(plane)) {
+  plane$dist[i] <- geodist(data.frame(long = plane$long[i],
+                                      lat = plane$lat[i]),
+                 data.frame(long = plane$long[i-1],
+                            lat = plane$lat[i-1]),
+                 measure = "geodesic")
+  }
+  planes.calc <- c(planes.calc, list(plane))
+}
+
+head(planes.calc)
+```
+
+
+```{r}
+#Calculate the time difference between readings
+#Calculate the speed at each interval based on distance traveled and time 
+planes.calc.2 <- list()
+
+for (plane in planes.calc) {
+  for (i in 2:nrow(plane)) {
+    plane$time.dif[i] <- as.numeric(difftime(plane$datetime[i], plane$datetime[i-1], units="secs"))
+    plane$speed[i] <- plane$dist[i] / plane$time.dif[i]
+  }
+  planes.calc.2 <- c(planes.calc.2, list(plane))
+}
+head(planes.calc.2)
+
+hist(planes.calc.2[[1]]$speed, xlim = c(150,330))
+
+```
+
+```{r}
+#Get rows where ground.speed is not NA
+clean.airspeed <- aircraft[!is.na(aircraft$ground.speed),]
+head(clean.airspeed$ground.speed)
+#convert reported ground speed to meters per second
+clean.airspeed$ground.speed <- clean.airspeed$ground.speed / 1.94384
+
+#Calculate the mean, sd and number of observations for each hex
+airspeed <- do.call(data.frame, aggregate(clean.airspeed$ground.speed, by=list(clean.airspeed$aircraft.hex), 
+                      function(x) c(mn = mean(x), sd = sd(x), n = length(x))))
+# Combine the calculated airspeed variables 
+airspeed.calc <- do.call("rbind", planes.calc.2)
+#Select only those greated than 40 m/s to eliminate bad reading between different flights
+airspeed.calc <- airspeed.calc[which(airspeed.calc$speed >= 5),]
+
+head(airspeed.calc[which(airspeed.calc$speed >= 5),])
+#Select mean, sd and n for every hex
+airspeed.calc.agg <- do.call(data.frame, aggregate(airspeed.calc$speed, by=list(airspeed.calc$aircraft.hex), 
+                               function(x) c(mn = mean(x), sd = sd(x), n = length(x))))
+#desciptive col names 
+colnames(airspeed) <- c("aircraft.hex", "rep.speed", "rep.sd", "rep.n") 
+colnames(airspeed.calc.agg ) <- c("aircraft.hex", "calc.speed", "calc.sd", "calc.n") 
+
+#merge the two dataframes 
+airspeed.merge <- merge(airspeed, airspeed.calc.agg, by = "aircraft.hex")
+
+#Plot shows some deviations but mostly it looks normal
+plot(airspeed.merge$rep.speed, airspeed.merge$calc.speed, main="Reported vs Calculated Speed",
+     xlab="Reported Speed (m/s)", ylab="Calculated Speed (m/s)")
+
+head(airspeed.merge)
+
+#Difference between calculated and reported air speeds
+airspeed.merge$dif <- airspeed.merge$calc.speed - airspeed.merge$rep.speed
+
+#Calculate the standard error for both samples 
+airspeed.merge$s.err <- sqrt(((airspeed.merge$rep.sd^2)/airspeed.merge$rep.n)
+                             +((airspeed.merge$calc.sd^2)/airspeed.merge$calc.n))
+
+#Calculate the t score at each row
+airspeed.merge$t <- airspeed.merge$dif / airspeed.merge$s.err
+
+#Calculate the degrees of freedom 
+attach(airspeed.merge)
+# rep = s1, N1, calc = s2,N2
+airspeed.merge$df <- ((((rep.sd^2)/rep.n) + ((calc.sd^2)/calc.n))^2) / (((((rep.sd^2) / rep.n)^2)/(rep.n - 1)) + ((((calc.sd^2) / calc.n)^2) / (calc.n - 1)))
+detach(airspeed.merge)
+
+#Find the critical value for each row 
+airspeed.merge$crit.val <- qt(p=0.025, df = airspeed.merge$df, lower.tail = FALSE)
+
+#indicate if the difference is significant 
+airspeed.merge$sig <- ifelse(abs(airspeed.merge$t) >= airspeed.merge$crit.val, 1, 0)
+
+#Those with significant difference 
+airspeed.merge[which(airspeed.merge$sig == 1),]
+
+test <- na.omit(airspeed.merge)
+
+#Proportion of diferences that are significant 
+(p <- mean(test$sig))
+#0.03073546
+
+
+#indicates that the proportion that are different, is significantly different than 0. 
+z <- p / (sqrt((p*(1-p))/nrow(test)))
+z
+
+```
+
+Test hex here
+```{r}
+fault <- planes.calc.2[[508]]
+
+plot(fault$long, fault$lat)
+
+fault[which(fault$lat <= 38.2),]
+
+fault
+```
+
+
+
+
+
+
+
+
+
+
